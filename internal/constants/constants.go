@@ -1,5 +1,5 @@
 package constants
 
 const (
-	MaxKeySizeBytes = 256
+	MaxKeySizeBytes = 1024
 )

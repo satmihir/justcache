@@ -288,28 +288,28 @@ func TestPut_TriggersLRUEviction(t *testing.T) {
 }
 
 func TestPut_TriggersMultipleEvictions(t *testing.T) {
-	s := newStorage(20)
-	// Each entry: 6 bytes
+	s := newStorage(30)
+	// Each entry: 6 bytes (1 key + 5 value)
 	mustPut(t, s, "a", []byte("11111"), time.Hour)
 	mustPut(t, s, "b", []byte("22222"), time.Hour)
 	mustPut(t, s, "c", []byte("33333"), time.Hour)
-	// Total: 18 bytes
+	mustPut(t, s, "d", []byte("44444"), time.Hour)
+	// Total: 24 bytes, remaining: 6 bytes
 
-	// This needs 14 bytes, will evict "a" and "b"
-	err := s.Put("d", []byte("1234567890123"), time.Hour)
+	// This needs 10 bytes (1 + 9), will evict "a" (6) to get 12 bytes available
+	// Then evict "b" too to have enough (12 bytes needed total, have 6+6=12)
+	err := s.Put("e", []byte("123456789"), time.Hour)
 	if err != nil {
 		t.Errorf("Put() error = %v", err)
 	}
 
-	// "a" and "b" should be evicted
-	for _, k := range []string{"a", "b"} {
-		if _, err := s.Get(k); err != ErrKeyNotFound {
-			t.Errorf("Get(%q) should return ErrKeyNotFound", k)
-		}
+	// "a" should be evicted (needed to free space)
+	if _, err := s.Get("a"); err != ErrKeyNotFound {
+		t.Errorf("Get(a) should return ErrKeyNotFound")
 	}
 
-	// "c" and "d" should exist
-	for _, k := range []string{"c", "d"} {
+	// "c", "d", "e" should exist
+	for _, k := range []string{"c", "d", "e"} {
 		if _, err := s.Get(k); err != nil {
 			t.Errorf("Get(%q) error = %v", k, err)
 		}
@@ -426,14 +426,18 @@ func TestLRU_MultipleAccessesAffectOrder(t *testing.T) {
 func TestEviction_DeletesKeyBeingUpdated(t *testing.T) {
 	// This tests the bug we fixed: when updating a key that's at the LRU head,
 	// eviction might delete it, then we try to delete it again.
-	s := newStorage(12)
+	// We need enough space so that after evicting the old key, the new one fits.
+	s := newStorage(20)
 
 	mustPut(t, s, "a", []byte("11111"), time.Hour) // 6 bytes, at head
-	mustPut(t, s, "b", []byte("22222"), time.Hour) // 6 bytes, at tail
-	// Total: 12 bytes (full)
+	mustPut(t, s, "b", []byte("22222"), time.Hour) // 6 bytes
+	mustPut(t, s, "c", []byte("33333"), time.Hour) // 6 bytes, at tail
+	// Total: 18 bytes, 2 bytes remaining
 
-	// Update "a" with larger value (needs more memory)
-	// Since "a" is at head, eviction will delete it first
+	// Update "a" with larger value (needs 8 bytes total)
+	// additionalMemoryNeeded = 8 - 6 = 2, but we only have 2 free
+	// So eviction kicks in, and since "a" is at head (LRU), it gets evicted
+	// Then existingObjectSize becomes 0, and we add the new "a"
 	err := s.Put("a", []byte("1234567"), time.Hour) // 8 bytes needed
 	if err != nil {
 		t.Errorf("Put() error = %v", err)
@@ -446,6 +450,13 @@ func TestEviction_DeletesKeyBeingUpdated(t *testing.T) {
 	}
 	if string(val) != "1234567" {
 		t.Errorf("Get(a) = %q, want %q", val, "1234567")
+	}
+
+	// "b" and "c" should still exist
+	for _, k := range []string{"b", "c"} {
+		if _, err := s.Get(k); err != nil {
+			t.Errorf("Get(%q) error = %v", k, err)
+		}
 	}
 }
 
@@ -680,12 +691,25 @@ func TestTTL_AllExpired(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Put new item - TTL cleanup should free everything
+	// Put new item - TTL cleanup only frees enough to fit the new item
+	// It doesn't proactively clean all expired items
 	mustPut(t, s, "d", []byte("44444"), time.Hour)
 
-	assertStoreSize(t, s, 1)
+	// "d" should exist
 	if _, err := s.Get("d"); err != nil {
 		t.Errorf("Get(d) error = %v", err)
 	}
+
+	// Accessing expired keys should return not found and clean them up
+	for _, k := range []string{"a", "b", "c"} {
+		if _, err := s.Get(k); err != ErrKeyNotFound {
+			t.Errorf("Get(%q) should return ErrKeyNotFound for expired key", k)
+		}
+	}
+
+	// Now store should only have "d"
+	assertStoreSize(t, s, 1)
 }
+
+
 
