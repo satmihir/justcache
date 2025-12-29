@@ -32,7 +32,7 @@ type Router interface {
 	// Update the nodes in the router.
 	SetNodes(nodes []*Node)
 	// Get up to k nodes for a key, ordered by preference (descending score).
-	GetNodes(key string, k int) []*Node
+	GetNodes(key []byte, k int) []*Node
 }
 
 // RendezvousRouter is safe for concurrent use.
@@ -68,7 +68,7 @@ func scoreBetter(a, b nodeScore) bool {
 	return a.node.identityString < b.node.identityString
 }
 
-func (r *RendezvousRouter) GetNodes(key string, k int) []*Node {
+func (r *RendezvousRouter) GetNodes(key []byte, k int) []*Node {
 	nodes := r.nodes.Load().([]*Node)
 
 	if len(nodes) == 0 || k <= 0 {

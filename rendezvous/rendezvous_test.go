@@ -75,8 +75,8 @@ func TestNode_IdentityHashDeterminism(t *testing.T) {
 
 func TestNode_IdentityHashUniqueness(t *testing.T) {
 	tests := []struct {
-		name string
-		id1  string
+		name  string
+		id1   string
 		port1 int
 		id2   string
 		port2 int
@@ -162,7 +162,7 @@ func TestRendezvousRouter_SetNodes(t *testing.T) {
 	originalNode := nodes[0]
 	nodes[0] = NewNode("c", 3)
 
-	result := router.GetNodes("key", 1)
+	result := router.GetNodes([]byte("key"), 1)
 	if result[0] != originalNode {
 		t.Error("SetNodes should copy nodes, not store reference")
 	}
@@ -176,12 +176,12 @@ func TestRendezvousRouter_GetNodes_EdgeCases(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		nodes      []*Node
-		key        string
-		k          int
-		wantLen    int
-		wantNil    bool
+		name    string
+		nodes   []*Node
+		key     string
+		k       int
+		wantLen int
+		wantNil bool
 	}{
 		{
 			name:    "empty nodes",
@@ -258,7 +258,7 @@ func TestRendezvousRouter_GetNodes_EdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router := NewRendezvousRouter(tt.nodes, nil)
-			result := router.GetNodes(tt.key, tt.k)
+			result := router.GetNodes([]byte(tt.key), tt.k)
 
 			if tt.wantNil {
 				if result != nil {
@@ -299,9 +299,9 @@ func TestRendezvousRouter_Determinism(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("key=%s,k=%d", tt.key, tt.k), func(t *testing.T) {
 			// Call multiple times
-			result1 := router.GetNodes(tt.key, tt.k)
-			result2 := router.GetNodes(tt.key, tt.k)
-			result3 := router.GetNodes(tt.key, tt.k)
+			result1 := router.GetNodes([]byte(tt.key), tt.k)
+			result2 := router.GetNodes([]byte(tt.key), tt.k)
+			result3 := router.GetNodes([]byte(tt.key), tt.k)
 
 			if len(result1) != len(result2) || len(result2) != len(result3) {
 				t.Fatal("results have different lengths")
@@ -344,9 +344,9 @@ func TestRendezvousRouter_ConsistentRegardlessOfNodeOrder(t *testing.T) {
 	for _, key := range keys {
 		for k := 1; k <= 3; k++ {
 			t.Run(fmt.Sprintf("key=%s,k=%d", key, k), func(t *testing.T) {
-				result1 := router1.GetNodes(key, k)
-				result2 := router2.GetNodes(key, k)
-				result3 := router3.GetNodes(key, k)
+				result1 := router1.GetNodes([]byte(key), k)
+				result2 := router2.GetNodes([]byte(key), k)
+				result3 := router3.GetNodes([]byte(key), k)
 
 				for i := range result1 {
 					if result1[i].identityString != result2[i].identityString {
@@ -377,8 +377,8 @@ func TestRendezvousRouter_SaltAffectsRouting(t *testing.T) {
 	differentCount := 0
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("key-%d", i)
-		result1 := router1.GetNodes(key, 1)
-		result2 := router2.GetNodes(key, 1)
+		result1 := router1.GetNodes([]byte(key), 1)
+		result2 := router2.GetNodes([]byte(key), 1)
 
 		if result1[0].identityString != result2[0].identityString {
 			differentCount++
@@ -407,7 +407,7 @@ func TestRendezvousRouter_Distribution(t *testing.T) {
 
 	for i := 0; i < numKeys; i++ {
 		key := fmt.Sprintf("key-%d", i)
-		result := router.GetNodes(key, 1)
+		result := router.GetNodes([]byte(key), 1)
 		counts[result[0].identityString]++
 	}
 
@@ -438,9 +438,9 @@ func TestRendezvousRouter_ResultsAreOrdered(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("key-%d", i)
 
-		result1 := router.GetNodes(key, 1)
-		result2 := router.GetNodes(key, 2)
-		result3 := router.GetNodes(key, 3)
+		result1 := router.GetNodes([]byte(key), 1)
+		result2 := router.GetNodes([]byte(key), 2)
+		result3 := router.GetNodes([]byte(key), 3)
 
 		// result1[0] should equal result2[0] and result3[0]
 		if result1[0] != result2[0] {
@@ -468,7 +468,7 @@ func TestRendezvousRouter_NoDuplicatesInResults(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("key-%d", i)
-		result := router.GetNodes(key, 3)
+		result := router.GetNodes([]byte(key), 3)
 
 		seen := make(map[*Node]bool)
 		for _, node := range result {
@@ -500,7 +500,7 @@ func TestRendezvousRouter_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < numOperations; j++ {
 				key := fmt.Sprintf("key-%d-%d", id, j)
-				result := router.GetNodes(key, 2)
+				result := router.GetNodes([]byte(key), 2)
 				if len(result) != 2 {
 					t.Errorf("expected 2 nodes, got %d", len(result))
 				}
@@ -531,4 +531,3 @@ func TestRouterInterface(t *testing.T) {
 	var _ Router = (*RendezvousRouter)(nil)
 	var _ Router = NewRendezvousRouter(nil, nil)
 }
-
