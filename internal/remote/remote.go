@@ -315,6 +315,12 @@ func setResponseHeaders(w http.ResponseWriter, entry *storage.CacheEntry) {
 	w.Header().Set(headerSuperhot, "false") // TODO: implement superhot detection
 }
 
+// Handler returns the HTTP handler for the server.
+// Useful for testing with httptest.Server.
+func (s *CacheServer) Handler() http.Handler {
+	return s.mux
+}
+
 // Start starts the CacheServer
 func (s *CacheServer) Start() error {
 	return http.ListenAndServe(s.addr, s.mux)
