@@ -19,14 +19,25 @@ var (
 	ErrInvalidTTL          = errors.New("TTL must be greater than zero")
 )
 
+// CacheEntry contains value and metadata for a cached item
+type CacheEntry struct {
+	Value        []byte
+	Size         int
+	RemainingTTL time.Duration
+}
+
 // Local storage with key-value store with caching semantics
 type LocalStorage interface {
-	// Get the value for the given key. Returns nil if the key is not found.
-	Get(key string) ([]byte, error)
+	// GetWithMetadata returns the value and metadata for the given key.
+	Get(key string) (*CacheEntry, error)
 	// Put the given value for the given key.
 	Put(key string, value []byte, ttl time.Duration) error
 	// Delete the given key.
 	Delete(key string) error
+	// CanFit checks if there's enough space to store a value of the given size.
+	// This is best-effort and reflects the current snapshot only.
+	// The key size is included in the calculation.
+	CanFit(keySize, valueSize int) bool
 }
 
 // InMemoryStorage is a local storage implementation that uses in-memory storage
@@ -44,7 +55,7 @@ type InMemoryStorage struct {
 	lru lruList
 }
 
-func (s *InMemoryStorage) Get(key string) ([]byte, error) {
+func (s *InMemoryStorage) Get(key string) (*CacheEntry, error) {
 	// Validate before acquiring lock to reduce lock hold time
 	if err := validateKey(key); err != nil {
 		return nil, err
@@ -57,14 +68,20 @@ func (s *InMemoryStorage) Get(key string) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 
-	if node.ExpirationTime.Before(time.Now()) {
+	now := time.Now()
+	if node.ExpirationTime.Before(now) {
 		s.deleteUnlocked(key)
 		return nil, ErrKeyNotFound
 	}
 
 	// Move the node to the tail of the list (most recently used).
 	s.lru.moveToTail(node)
-	return node.Value, nil
+
+	return &CacheEntry{
+		Value:        node.Value,
+		Size:         len(node.Value),
+		RemainingTTL: node.ExpirationTime.Sub(now),
+	}, nil
 }
 
 func (s *InMemoryStorage) Put(key string, value []byte, ttl time.Duration) error {
@@ -160,6 +177,22 @@ func (s *InMemoryStorage) Delete(key string) error {
 	defer s.mutex.Unlock()
 
 	return s.deleteUnlocked(key)
+}
+
+// CanFit checks if there's enough space to store a value of the given size.
+// This is best-effort and reflects the current snapshot only.
+// Returns true if the object could potentially fit (with eviction if needed).
+func (s *InMemoryStorage) CanFit(keySize, valueSize int) bool {
+	totalSize := uint64(keySize + valueSize)
+
+	// Object larger than max memory can never fit
+	if totalSize > s.maxMemory {
+		return false
+	}
+
+	// If it fits within max memory, it can potentially be stored
+	// (eviction will make room if needed)
+	return true
 }
 
 // deleteUnlocked removes the key from storage. Lock must be held by caller.

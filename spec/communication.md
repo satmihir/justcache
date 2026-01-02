@@ -45,7 +45,8 @@ Coordinates cache population to prevent thundering herds.
 
 ### Request headers
 
-- `x-jc-size: <bytes>` *(optional but recommended; enables early reject)*
+- `x-jc-size: <bytes>` *(optional but recommended; enables early reject and size validation on PUT)*
+- `x-jc-promise-ttl: <ms>` *(optional; default 30000 = 30 seconds)* — how long the promise should remain valid
 - `x-jc-dryrun: true|false` *(optional; default `false`)*
 
 If `x-jc-dryrun: true`, the server returns the decision it *would* make, but **does not create a promise**.
@@ -73,6 +74,7 @@ Uploads the value bytes. This should generally be preceded by a successful `POST
 ### Request headers
 
 - `Content-Length: <bytes>` *(required)*
+- `x-jc-ttl: <ms>` *(optional; default 1800000 = 30 minutes)* — TTL for the cached value in milliseconds
 
 ### Request body
 
@@ -81,6 +83,7 @@ Uploads the value bytes. This should generally be preceded by a successful `POST
 ### Response codes
 
 - `200 OK` — value stored successfully
+- `400 Bad Request` — invalid `x-jc-ttl` header (non-numeric, zero, or negative)
 - `409 Conflict` — upload rejected (e.g., no active promise, promise owned by someone else, or size mismatch vs promised size)
 - `411 Length Required` — missing `Content-Length`
 - `413 Payload Too Large` — exceeds server limits
@@ -91,5 +94,8 @@ Uploads the value bytes. This should generally be preceded by a successful `POST
 
 ## Notes
 
-- `x-jc-ttl` is interpreted as **remaining TTL** for an existing stored value.
-- If the client provided `x-jc-size` on `POST` and received `202`, servers may require `PUT Content-Length` to match the promised size.
+- `x-jc-ttl` in **response headers** is interpreted as **remaining TTL** for an existing stored value.
+- `x-jc-ttl` in **PUT request headers** sets the TTL for the new value (defaults to 30 minutes if not provided).
+- If the client provided `x-jc-size` on `POST` and received `202`, the server **requires** `PUT Content-Length` to match the promised size.
+- Promises are automatically cleaned up by the server every 5 minutes, and on access if expired.
+- PUT requests **require** an active promise created by a prior POST (returns 409 Conflict otherwise).

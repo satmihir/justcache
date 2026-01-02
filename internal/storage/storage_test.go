@@ -53,12 +53,12 @@ func TestGet_KeyFound(t *testing.T) {
 	s := newStorage(1000)
 	mustPut(t, s, "key", []byte("value"), time.Hour)
 
-	val, err := s.Get("key")
+	entry, err := s.Get("key")
 	if err != nil {
 		t.Errorf("Get() error = %v", err)
 	}
-	if string(val) != "value" {
-		t.Errorf("Get() = %q, want %q", val, "value")
+	if string(entry.Value) != "value" {
+		t.Errorf("Get() = %q, want %q", entry.Value, "value")
 	}
 }
 
@@ -119,9 +119,9 @@ func TestPut_UpdateExistingKey(t *testing.T) {
 	assertStoreSize(t, s, 1)
 	assertMemoryUsed(t, s, 11) // 3 + 8
 
-	val, _ := s.Get("key")
-	if string(val) != "newvalue" {
-		t.Errorf("Get() = %q, want %q", val, "newvalue")
+	entry, _ := s.Get("key")
+	if string(entry.Value) != "newvalue" {
+		t.Errorf("Get() = %q, want %q", entry.Value, "newvalue")
 	}
 }
 
@@ -444,12 +444,12 @@ func TestEviction_DeletesKeyBeingUpdated(t *testing.T) {
 	}
 
 	// Verify "a" has new value
-	val, err := s.Get("a")
+	entry, err := s.Get("a")
 	if err != nil {
 		t.Errorf("Get(a) error = %v", err)
 	}
-	if string(val) != "1234567" {
-		t.Errorf("Get(a) = %q, want %q", val, "1234567")
+	if string(entry.Value) != "1234567" {
+		t.Errorf("Get(a) = %q, want %q", entry.Value, "1234567")
 	}
 
 	// "b" and "c" should still exist
@@ -487,7 +487,7 @@ func TestMemoryAccounting_AfterManyOperations(t *testing.T) {
 
 	// Update one
 	mustPut(t, s, "a", []byte("11111"), time.Hour) // 6 bytes
-	assertMemoryUsed(t, s, 10) // 6 + 4
+	assertMemoryUsed(t, s, 10)                     // 6 + 4
 
 	// Add another
 	mustPut(t, s, "d", []byte("444"), time.Hour) // 4 bytes
@@ -527,16 +527,16 @@ func TestSingleItem_AllOperations(t *testing.T) {
 	assertStoreSize(t, s, 1)
 
 	// Get
-	val, _ := s.Get("key")
-	if string(val) != "value" {
-		t.Errorf("Get() = %q", val)
+	entry, _ := s.Get("key")
+	if string(entry.Value) != "value" {
+		t.Errorf("Get() = %q", entry.Value)
 	}
 
 	// Update
 	mustPut(t, s, "key", []byte("newval"), time.Hour)
-	val, _ = s.Get("key")
-	if string(val) != "newval" {
-		t.Errorf("Get() = %q", val)
+	entry, _ = s.Get("key")
+	if string(entry.Value) != "newval" {
+		t.Errorf("Get() = %q", entry.Value)
 	}
 
 	// Delete
@@ -559,12 +559,12 @@ func TestConcurrent_Reads(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				val, err := s.Get("key")
+				entry, err := s.Get("key")
 				if err != nil {
 					t.Errorf("Get() error = %v", err)
 				}
-				if string(val) != "value" {
-					t.Errorf("Get() = %q", val)
+				if string(entry.Value) != "value" {
+					t.Errorf("Get() = %q", entry.Value)
 				}
 			}
 		}()
@@ -633,6 +633,45 @@ func TestConcurrent_ReadWrite(t *testing.T) {
 }
 
 // ============================================================================
+// CanFit Tests
+// ============================================================================
+
+func TestCanFit_WithinCapacity(t *testing.T) {
+	s := newStorage(100)
+	if !s.CanFit(5, 50) { // 55 bytes < 100
+		t.Error("CanFit should return true for object within capacity")
+	}
+}
+
+func TestCanFit_ExactlyMaxCapacity(t *testing.T) {
+	s := newStorage(100)
+	if !s.CanFit(10, 90) { // 100 bytes exactly
+		t.Error("CanFit should return true for object at exact capacity")
+	}
+}
+
+func TestCanFit_ExceedsCapacity(t *testing.T) {
+	s := newStorage(100)
+	if s.CanFit(10, 100) { // 110 bytes > 100
+		t.Error("CanFit should return false for object exceeding capacity")
+	}
+}
+
+func TestCanFit_ZeroSize(t *testing.T) {
+	s := newStorage(100)
+	if !s.CanFit(5, 0) { // 5 bytes < 100
+		t.Error("CanFit should return true for zero-size value")
+	}
+}
+
+func TestCanFit_LargeObject(t *testing.T) {
+	s := newStorage(100)
+	if s.CanFit(50, 100) { // 150 bytes > 100
+		t.Error("CanFit should return false for large object")
+	}
+}
+
+// ============================================================================
 // Constructor Tests
 // ============================================================================
 
@@ -661,7 +700,7 @@ func TestTTL_ExpiresDuringEviction(t *testing.T) {
 	s := newStorage(18)
 
 	// Put items with varying TTLs
-	mustPut(t, s, "a", []byte("11111"), 50*time.Millisecond)  // Will expire
+	mustPut(t, s, "a", []byte("11111"), 50*time.Millisecond) // Will expire
 	mustPut(t, s, "b", []byte("22222"), time.Hour)
 	mustPut(t, s, "c", []byte("33333"), time.Hour)
 	// Total: 18 bytes
@@ -710,6 +749,3 @@ func TestTTL_AllExpired(t *testing.T) {
 	// Now store should only have "d"
 	assertStoreSize(t, s, 1)
 }
-
-
-
