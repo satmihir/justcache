@@ -81,6 +81,7 @@ func (s *CacheServer) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // parseKeyFromPath extracts the cache key from the URL path
 // Expected format: /cache/{key}
+// Note: r.URL.Path is already URL-decoded by net/http, so no unescaping needed here.
 func parseKeyFromPath(path string) (string, error) {
 	if !strings.HasPrefix(path, cachePathPrefix) {
 		return "", errors.New("invalid path: must start with /cache/")

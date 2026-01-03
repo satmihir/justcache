@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func newTestServerWithStorage(store storage.LocalStorage) (*CacheServer, *httpte
 
 func doGet(t *testing.T, ts *httptest.Server, key string) *http.Response {
 	t.Helper()
-	resp, err := http.Get(ts.URL + "/cache/" + key)
+	resp, err := http.Get(ts.URL + "/cache/" + url.PathEscape(key))
 	if err != nil {
 		t.Fatalf("GET /cache/%s failed: %v", key, err)
 	}
@@ -41,7 +42,7 @@ func doGet(t *testing.T, ts *httptest.Server, key string) *http.Response {
 
 func doPut(t *testing.T, ts *httptest.Server, key string, value []byte) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPut, ts.URL+"/cache/"+key, bytes.NewReader(value))
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/cache/"+url.PathEscape(key), bytes.NewReader(value))
 	if err != nil {
 		t.Fatalf("NewRequest failed: %v", err)
 	}
@@ -56,7 +57,7 @@ func doPut(t *testing.T, ts *httptest.Server, key string, value []byte) *http.Re
 
 func doPost(t *testing.T, ts *httptest.Server, key string) *http.Response {
 	t.Helper()
-	resp, err := http.Post(ts.URL+"/cache/"+key, "application/octet-stream", nil)
+	resp, err := http.Post(ts.URL+"/cache/"+url.PathEscape(key), "application/octet-stream", nil)
 	if err != nil {
 		t.Fatalf("POST /cache/%s failed: %v", key, err)
 	}
@@ -65,7 +66,7 @@ func doPost(t *testing.T, ts *httptest.Server, key string) *http.Response {
 
 func doPostWithSize(t *testing.T, ts *httptest.Server, key string, size int64) *http.Response {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/cache/"+key, nil)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/cache/"+url.PathEscape(key), nil)
 	req.Header.Set("x-jc-size", strconv.FormatInt(size, 10))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -261,6 +262,44 @@ func TestGet_EmptyKey(t *testing.T) {
 	defer resp.Body.Close()
 
 	assertStatus(t, resp, http.StatusBadRequest)
+}
+
+func TestKey_SpecialCharacters(t *testing.T) {
+	_, ts := newTestServer(100000)
+	defer ts.Close()
+
+	// Test keys with special characters that require URL escaping
+	specialKeys := []string{
+		"key with spaces",
+		"key/with/slashes",
+		"key?with=query",
+		"key#with#hash",
+		"key%with%percent",
+		"emoji🎉key",
+		"path/to/file.txt",
+		"user@domain.com",
+	}
+
+	for _, key := range specialKeys {
+		t.Run(key, func(t *testing.T) {
+			value := []byte("value for " + key)
+
+			// Store using URL-escaped key
+			resp := doPostAndPut(t, ts, key, value)
+			resp.Body.Close()
+			assertStatus(t, resp, http.StatusOK)
+
+			// Retrieve using URL-escaped key
+			getResp := doGet(t, ts, key)
+			defer getResp.Body.Close()
+			assertStatus(t, getResp, http.StatusOK)
+
+			body, _ := io.ReadAll(getResp.Body)
+			if string(body) != string(value) {
+				t.Errorf("Value = %q, want %q", string(body), string(value))
+			}
+		})
+	}
 }
 
 // ============================================================================

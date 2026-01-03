@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/satmihir/justcache/internal/retry"
 )
 
 // Header names used by the protocol
@@ -72,8 +75,9 @@ const (
 
 // Client is a JustCache client for a single server
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL     string
+	httpClient  *http.Client
+	retryConfig retry.Config
 }
 
 // Option configures the client
@@ -93,6 +97,13 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithRetryConfig sets the retry configuration
+func WithRetryConfig(config retry.Config) Option {
+	return func(client *Client) {
+		client.retryConfig = config
+	}
+}
+
 // New creates a new Client for the given server address
 func New(serverAddr string, opts ...Option) *Client {
 	c := &Client{
@@ -100,6 +111,7 @@ func New(serverAddr string, opts ...Option) *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		retryConfig: retry.DefaultConfig(),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -137,6 +149,7 @@ func (c *Client) Get(ctx context.Context, key string) (*Entry, error) {
 
 // Set stores a value in the cache. This handles the full POST+PUT flow.
 // Returns ErrConflict if another client is uploading the same key.
+// For automatic retry on conflict, use SetWithRetry.
 func (c *Client) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	// Step 1: POST to create promise
 	result, err := c.Post(ctx, key, int64(len(value)), 0, false)
@@ -158,6 +171,61 @@ func (c *Client) Set(ctx context.Context, key string, value []byte, ttl time.Dur
 	default:
 		return fmt.Errorf("unexpected POST status: %d", result.Status)
 	}
+}
+
+// SetWithRetry stores a value with automatic retry on conflict.
+// It uses exponential backoff with jitter, respecting server-provided Retry-After hints.
+func (c *Client) SetWithRetry(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	_, err := retry.DoWithHint(ctx, c.retryConfig, func() (struct{}, error, bool, time.Duration) {
+		result, err := c.Post(ctx, key, int64(len(value)), 0, false)
+		if err != nil {
+			// Network/transport errors are retryable
+			return struct{}{}, err, true, 0
+		}
+
+		switch result.Status {
+		case PostAccepted:
+			// Got the promise, now PUT
+			err := c.Put(ctx, key, value, ttl)
+			if err != nil {
+				// PUT errors are generally not retryable (promise is consumed)
+				return struct{}{}, err, false, 0
+			}
+			return struct{}{}, nil, false, 0
+
+		case PostExists:
+			// Key already exists - success
+			return struct{}{}, nil, false, 0
+
+		case PostConflict:
+			// Another client has the promise - retry with server hint
+			return struct{}{}, ErrConflict, true, result.RetryAfter
+
+		case PostInsufficientStorage:
+			// Terminal error - don't retry
+			return struct{}{}, ErrInsufficientStorage, false, 0
+
+		default:
+			return struct{}{}, fmt.Errorf("unexpected POST status: %d", result.Status), false, 0
+		}
+	})
+	return err
+}
+
+// GetWithRetry retrieves a value with automatic retry on transient errors.
+func (c *Client) GetWithRetry(ctx context.Context, key string) (*Entry, error) {
+	return retry.Do(ctx, c.retryConfig, func() (*Entry, error, bool) {
+		entry, err := c.Get(ctx, key)
+		if err != nil {
+			// NotFound is not retryable
+			if errors.Is(err, ErrNotFound) {
+				return nil, err, false
+			}
+			// Other errors (network, etc.) are retryable
+			return nil, err, true
+		}
+		return entry, nil, false
+	})
 }
 
 // PostOptions configures a POST request
@@ -260,7 +328,7 @@ func (c *Client) Put(ctx context.Context, key string, value []byte, ttl time.Dur
 
 // url constructs the full URL for a cache key
 func (c *Client) url(key string) string {
-	return c.baseURL + "/cache/" + key
+	return c.baseURL + "/cache/" + url.PathEscape(key)
 }
 
 // parseEntry extracts metadata from response headers

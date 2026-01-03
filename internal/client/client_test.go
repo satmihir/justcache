@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -256,5 +257,84 @@ func TestClient_LargeValue(t *testing.T) {
 
 	if len(entry.Value) != len(largeValue) {
 		t.Errorf("Value length = %d, want %d", len(entry.Value), len(largeValue))
+	}
+}
+
+func TestClient_SetWithRetry_Success(t *testing.T) {
+	_, ts, client := newTestServerAndClient()
+	defer ts.Close()
+	ctx := context.Background()
+
+	err := client.SetWithRetry(ctx, "retrykey", []byte("value"), time.Hour)
+	if err != nil {
+		t.Fatalf("SetWithRetry error = %v", err)
+	}
+
+	entry, err := client.Get(ctx, "retrykey")
+	if err != nil {
+		t.Fatalf("Get error = %v", err)
+	}
+	if string(entry.Value) != "value" {
+		t.Errorf("Value = %q, want %q", string(entry.Value), "value")
+	}
+}
+
+func TestClient_SetWithRetry_ExistingKey(t *testing.T) {
+	_, ts, client := newTestServerAndClient()
+	defer ts.Close()
+	ctx := context.Background()
+
+	// Set initial value
+	err := client.Set(ctx, "existingkey", []byte("original"), time.Hour)
+	if err != nil {
+		t.Fatalf("Initial Set error = %v", err)
+	}
+
+	// SetWithRetry on existing key should succeed (idempotent)
+	err = client.SetWithRetry(ctx, "existingkey", []byte("newvalue"), time.Hour)
+	if err != nil {
+		t.Fatalf("SetWithRetry on existing key error = %v", err)
+	}
+
+	// Value should still be original (POST returned 200 Exists, no PUT)
+	entry, err := client.Get(ctx, "existingkey")
+	if err != nil {
+		t.Fatalf("Get error = %v", err)
+	}
+	if string(entry.Value) != "original" {
+		t.Errorf("Value = %q, want %q (original)", string(entry.Value), "original")
+	}
+}
+
+func TestClient_GetWithRetry_Success(t *testing.T) {
+	_, ts, client := newTestServerAndClient()
+	defer ts.Close()
+	ctx := context.Background()
+
+	// Set a value first
+	err := client.Set(ctx, "getretrykey", []byte("hello"), time.Hour)
+	if err != nil {
+		t.Fatalf("Set error = %v", err)
+	}
+
+	// GetWithRetry should succeed
+	entry, err := client.GetWithRetry(ctx, "getretrykey")
+	if err != nil {
+		t.Fatalf("GetWithRetry error = %v", err)
+	}
+	if string(entry.Value) != "hello" {
+		t.Errorf("Value = %q, want %q", string(entry.Value), "hello")
+	}
+}
+
+func TestClient_GetWithRetry_NotFound(t *testing.T) {
+	_, ts, client := newTestServerAndClient()
+	defer ts.Close()
+	ctx := context.Background()
+
+	// GetWithRetry on missing key should not retry and return ErrNotFound
+	_, err := client.GetWithRetry(ctx, "missingkey")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("Error = %v, want ErrNotFound", err)
 	}
 }
